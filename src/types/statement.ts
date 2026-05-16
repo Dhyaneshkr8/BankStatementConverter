@@ -26,6 +26,7 @@ export interface RawTransaction {
   balance?: number | string | null;
   referenceNumber?: string;
   rawText?: string;
+  parsingConfidence?: number;
 }
 
 export interface StatementSummary {
@@ -94,12 +95,35 @@ export interface UploadSession {
   };
 }
 
+export interface WordPosition {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  page: number;
+}
+
+export interface PDFRectangle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  page: number;
+}
+
+export interface PDFWordData {
+  words: WordPosition[];
+  rectangles: PDFRectangle[];
+}
+
 export interface ParsingOptions {
   dateFormat?: string;
   currencySymbol?: string;
   decimalSeparator?: string;
   thousandsSeparator?: string;
   debitCreditFormat?: 'columns' | 'suffix' | 'sign';
+  wordPositions?: PDFWordData;
 }
 
 /** Base interface all bank parsers must implement. */

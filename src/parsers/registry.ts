@@ -1,6 +1,11 @@
 import type { IBankParser, RawTransaction, StatementSummary, ParsingOptions } from '@/types/statement';
 
-/** Central registry for all available parsers. Routes raw text to the correct parser. */
+/**
+ * Central registry for all available parsers.
+ * Routes raw text to the highest-confidence parser.
+ * GenericParser (confidence 0.10) acts as the always-available fallback
+ * so detection never throws for text-based PDFs.
+ */
 export class ParserRegistry {
   private parsers: Map<string, IBankParser> = new Map();
 
@@ -8,8 +13,9 @@ export class ParserRegistry {
     this.parsers.set(parser.bankName, parser);
   }
 
+  /** Returns named banks only — excludes "Generic" from the support list shown to users. */
   getRegisteredBanks(): string[] {
-    return Array.from(this.parsers.keys());
+    return Array.from(this.parsers.keys()).filter((name) => name !== 'Generic');
   }
 
   async detectBank(rawText: string): Promise<{ bankName: string; confidence: number }> {
@@ -20,10 +26,11 @@ export class ParserRegistry {
 
     const best = scores.sort((a, b) => b.confidence - a.confidence)[0];
 
-    if (!best || best.confidence < 0.4) {
+    // Threshold: anything above GenericParser's 0.10 wins. If only Generic
+    // matched, we still proceed — it will use heuristic parsing.
+    if (!best || best.confidence === 0) {
       throw new Error(
-        `Could not detect bank. Highest confidence: ${best?.confidence.toFixed(2) ?? 'none'}. ` +
-          `Supported banks: ${this.getRegisteredBanks().join(', ')}`
+        'Could not extract any text from this PDF. It may be a scanned or image-only document.'
       );
     }
 

@@ -104,6 +104,8 @@ export class ChaseParser implements IBankParser {
 
     let lastTransaction: RawTransaction | null = null;
     let pendingDescription = '';
+    // Track year from statement period for MM/DD-only dates
+    const currentYear = new Date().getFullYear();
 
     for (const line of lines) {
       if (/^date\s/i.test(line) || /^description/i.test(line)) continue;
@@ -119,9 +121,9 @@ export class ChaseParser implements IBankParser {
         }
 
         let rawDate = dateMatch[1]!;
-        // If date is MM/DD without year, assume current year
+        // If date is MM/DD without year, append current year
         if (rawDate.split('/').length === 2) {
-          rawDate += `/${new Date().getFullYear()}`;
+          rawDate += `/${currentYear}`;
         }
 
         const rest = line.slice(dateMatch[0].length).trim();
@@ -150,13 +152,14 @@ export class ChaseParser implements IBankParser {
   }
 
   private parseTransactionLine(rawDate: string, rest: string): RawTransaction | null {
-    // Chase amounts often prefixed with $ and may have negative sign
+    // Chase amounts: may have leading $ or -, e.g. "-$1,234.56" or "$500.00"
     const amountRegex = /(-?\$?\d{1,3}(?:,\d{3})*\.\d{2})/g;
-    const amounts: { value: string; index: number }[] = [];
+    const amounts: { value: string; numericValue: number; index: number }[] = [];
     let match: RegExpExecArray | null;
 
     while ((match = amountRegex.exec(rest)) !== null) {
-      amounts.push({ value: match[1]!, index: match.index });
+      const numericValue = parseAmount(match[1]!) ?? 0;
+      amounts.push({ value: match[1]!, numericValue, index: match.index });
     }
 
     if (amounts.length === 0) return null;
@@ -169,50 +172,57 @@ export class ChaseParser implements IBankParser {
     if (amounts.length >= 3) {
       const firstAmountIdx = amounts[amounts.length - 3]!.index;
       description = rest.slice(0, firstAmountIdx).trim();
-      const v1 = amounts[amounts.length - 3]!.value;
-      const v2 = amounts[amounts.length - 2]!.value;
+      const v1 = amounts[amounts.length - 3]!;
+      const v2 = amounts[amounts.length - 2]!;
       balance = amounts[amounts.length - 1]!.value;
 
-      // In Chase, negative amounts or amounts in "withdrawals" column are debits
-      if (v1.startsWith('-')) {
-        debit = v1;
-        credit = v2.startsWith('-') ? null : v2;
+      // Negative = debit (withdrawal), positive = credit (deposit)
+      if (v1.numericValue < 0) {
+        debit = v1.value;
+        credit = v2.numericValue > 0 ? v2.value : null;
+      } else if (v2.numericValue < 0) {
+        debit = v2.value;
+        credit = v1.numericValue > 0 ? v1.value : null;
       } else {
-        debit = v1;
-        credit = v2;
+        // Both positive: use column heuristic — first is debit, second is credit
+        debit = v1.value;
+        credit = v2.value;
       }
     } else if (amounts.length === 2) {
       const firstAmountIdx = amounts[0]!.index;
       description = rest.slice(0, firstAmountIdx).trim();
-
-      const val = amounts[0]!.value;
-      if (val.startsWith('-')) {
-        debit = val;
-      } else {
-        debit = val;
-      }
+      const v = amounts[0]!;
       balance = amounts[1]!.value;
-    } else {
-      description = rest.replace(amountRegex, '').trim();
-      // Single amount — could be debit or credit; without context we take it as is
-      const val = amounts[0]!.value;
-      if (val.startsWith('-')) {
-        debit = val;
+
+      // Negative → debit; positive → could be either, leave for inferDebitCredit
+      if (v.numericValue < 0) {
+        debit = v.value;
       } else {
-        credit = val;
+        debit = v.value; // inferDebitCredit will correct based on balance delta
+      }
+    } else {
+      // Single amount — no balance column
+      description = rest.replace(amountRegex, '').trim();
+      const v = amounts[0]!;
+      if (v.numericValue < 0) {
+        debit = v.value;
+      } else {
+        credit = v.value;
       }
     }
 
-    const debitNum = parseAmount(debit);
-    const creditNum = parseAmount(credit);
+    // Ensure debit values stored as positive numbers for consistency
+    const debitNum = debit != null ? Math.abs(parseAmount(debit) ?? 0) : null;
+    const creditNum = credit != null ? Math.abs(parseAmount(credit) ?? 0) : null;
 
     return {
       date: normalizeDate(rawDate, true),
       description: cleanDescription(description || 'Transaction'),
-      debit: debitNum === 0 ? null : (debit ?? null),
-      credit: creditNum === 0 ? null : (credit ?? null),
+      debit: debitNum === 0 ? null : (debitNum != null ? debitNum.toString() : null),
+      credit: creditNum === 0 ? null : (creditNum != null ? creditNum.toString() : null),
       balance: balance ?? undefined,
       rawText: `${rawDate} ${rest}`,
+      parsingConfidence: 0.85,
     };
   }
 }

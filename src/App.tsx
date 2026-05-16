@@ -65,7 +65,6 @@ export default function App() {
 
   const handleTransactionEdit = useCallback(
     (index: number, field: keyof NormalizedTransaction, value: string | number | null) => {
-      if (!data) return;
       setData((prev) => {
         if (!prev) return prev;
         const updated = [...prev.transactions];
@@ -73,7 +72,7 @@ export default function App() {
         return { ...prev, transactions: updated };
       });
     },
-    [data]
+    [] // setData is stable; no external deps needed
   );
 
   const isProcessing = ['uploaded', 'bank-detecting', 'extracting-text', 'parsing', 'validating'].includes(status);
