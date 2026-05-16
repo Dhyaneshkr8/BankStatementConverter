@@ -13,9 +13,11 @@ export class ParserRegistry {
     this.parsers.set(parser.bankName, parser);
   }
 
-  /** Returns named banks only — excludes "Generic" from the support list shown to users. */
+  /** Returns named banks only — excludes fallback parsers from the support list shown to users. */
   getRegisteredBanks(): string[] {
-    return Array.from(this.parsers.keys()).filter((name) => name !== 'Generic');
+    return Array.from(this.parsers.entries())
+      .filter(([, parser]) => !parser.isFallback)
+      .map(([name]) => name);
   }
 
   async detectBank(rawText: string): Promise<{ bankName: string; confidence: number }> {

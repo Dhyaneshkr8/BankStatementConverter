@@ -126,7 +126,7 @@ export class SBIParser implements IBankParser {
     // SBI statements may use a single combined Debit/Credit column with Dr/Cr suffix.
     // Check for that pattern first.
     const drCrMatch = rest.match(
-      /^(.+?)\s+(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)\s*(Dr|CR|Dr\.|Cr\.)\s+(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)$/i
+      /^(.+?)\s+(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)\s*(Dr\.?|Cr\.?)\s+(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)$/i
     );
     if (drCrMatch) {
       const { isDebit } = parseAmountWithSuffix(`${drCrMatch[2]} ${drCrMatch[3]}`);

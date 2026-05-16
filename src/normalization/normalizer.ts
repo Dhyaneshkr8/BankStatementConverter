@@ -1,5 +1,6 @@
 import type { RawTransaction, NormalizedTransaction } from '@/types/statement';
 import { parseAmount } from '@/parsers/utils';
+import { BALANCE_TOLERANCE } from '@/validation/validator';
 
 /** Convert RawTransaction[] from any parser into NormalizedTransaction[]. */
 export function normalize(
@@ -79,7 +80,7 @@ export function inferDebitCredit(
       const expectedBalance = prev.balance - curr.debit;
       const diff = Math.abs(expectedBalance - curr.balance);
       // If balance went UP instead of down, this debit is actually a credit
-      if (balanceDiff > 0 && diff < 0.02) {
+      if (balanceDiff > 0 && diff < BALANCE_TOLERANCE) {
         curr.credit = curr.debit;
         curr.debit = null;
         curr.transactionType = inferTransactionType(curr.description, null, curr.credit);
@@ -88,14 +89,14 @@ export function inferDebitCredit(
       const expectedBalance = prev.balance + curr.credit;
       const diff = Math.abs(expectedBalance - curr.balance);
       // If balance went DOWN instead of up, this credit is actually a debit
-      if (balanceDiff < 0 && diff < 0.02) {
+      if (balanceDiff < 0 && diff < BALANCE_TOLERANCE) {
         curr.debit = curr.credit;
         curr.credit = null;
         curr.transactionType = inferTransactionType(curr.description, curr.debit, null);
       }
     } else if (curr.debit != null && curr.credit != null) {
       // Both set: resolve using balance delta
-      if (Math.abs(balanceDiff) < 0.02) return transactions; // no-op row
+      if (Math.abs(balanceDiff) < BALANCE_TOLERANCE) continue; // no-op row — skip, don't exit
       if (balanceDiff < 0) {
         curr.debit = Math.abs(balanceDiff);
         curr.credit = null;
