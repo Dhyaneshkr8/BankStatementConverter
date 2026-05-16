@@ -1,5 +1,5 @@
 import type { IBankParser, RawTransaction, StatementSummary, ParsingOptions } from '@/types/statement';
-import { parseAmount, normalizeDate, cleanDescription, countKeywords } from '../utils';
+import { parseAmount, normalizeDate, cleanDescription, countKeywords, parseAmountWithSuffix } from '../utils';
 
 const SBI_KEYWORDS = [
   'state bank of india',
@@ -123,12 +123,31 @@ export class SBIParser implements IBankParser {
   }
 
   private parseTransactionLine(rawDate: string, rest: string): RawTransaction | null {
+    // SBI statements may use a single combined Debit/Credit column with Dr/Cr suffix.
+    // Check for that pattern first.
+    const drCrMatch = rest.match(
+      /^(.+?)\s+(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)\s*(Dr|CR|Dr\.|Cr\.)\s+(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)$/i
+    );
+    if (drCrMatch) {
+      const { isDebit } = parseAmountWithSuffix(`${drCrMatch[2]} ${drCrMatch[3]}`);
+      return {
+        date: normalizeDate(rawDate),
+        description: cleanDescription(drCrMatch[1]!),
+        debit: isDebit ? drCrMatch[2]! : null,
+        credit: isDebit === false ? drCrMatch[2]! : null,
+        balance: drCrMatch[4],
+        rawText: `${rawDate} ${rest}`,
+        parsingConfidence: 0.85,
+      };
+    }
+
+    // Standard multi-column format
     const amountRegex = /(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)/g;
     const amounts: { value: string; index: number }[] = [];
     let match: RegExpExecArray | null;
 
     while ((match = amountRegex.exec(rest)) !== null) {
-      // Skip very small numbers likely part of description (ref numbers, etc.)
+      // Filter out very short numbers that are likely part of reference codes
       if (match[1]!.replace(/,/g, '').length >= 2 || parseFloat(match[1]!) >= 10) {
         amounts.push({ value: match[1]!, index: match.index });
       }
@@ -144,9 +163,24 @@ export class SBIParser implements IBankParser {
     if (amounts.length >= 3) {
       const firstAmountIdx = amounts[amounts.length - 3]!.index;
       description = rest.slice(0, firstAmountIdx).trim();
-      debit = amounts[amounts.length - 3]!.value;
-      credit = amounts[amounts.length - 2]!.value;
+      const v1 = amounts[amounts.length - 3]!.value;
+      const v2 = amounts[amounts.length - 2]!.value;
       balance = amounts[amounts.length - 1]!.value;
+
+      const n1 = parseAmount(v1) ?? 0;
+      const n2 = parseAmount(v2) ?? 0;
+
+      // Same zero-check logic as HDFC: only one column has a non-zero value
+      if (n1 > 0 && n2 === 0) {
+        debit = v1;
+        credit = null;
+      } else if (n2 > 0 && n1 === 0) {
+        credit = v2;
+        debit = null;
+      } else {
+        debit = v1;
+        credit = v2;
+      }
     } else if (amounts.length === 2) {
       const firstAmountIdx = amounts[0]!.index;
       description = rest.slice(0, firstAmountIdx).trim();
@@ -158,16 +192,14 @@ export class SBIParser implements IBankParser {
       if (!description) return null;
     }
 
-    const debitNum = parseAmount(debit);
-    const creditNum = parseAmount(credit);
-
     return {
       date: normalizeDate(rawDate),
       description: cleanDescription(description || 'Transaction'),
-      debit: debitNum === 0 ? null : (debit ?? null),
-      credit: creditNum === 0 ? null : (credit ?? null),
+      debit,
+      credit,
       balance: balance ?? undefined,
       rawText: `${rawDate} ${rest}`,
+      parsingConfidence: 0.85,
     };
   }
 }

@@ -1,12 +1,14 @@
 import type { NormalizedTransaction, ValidationResult, ValidationWarning } from '@/types/statement';
 
-const BALANCE_TOLERANCE = 0.02;
+// Matches TECHNICAL_SPEC.md: ±0.01 tolerance on balance reconciliation
+const BALANCE_TOLERANCE = 0.01;
 
 export function validate(transactions: NormalizedTransaction[]): ValidationResult {
   const errors: ValidationWarning[] = [];
   const warnings: ValidationWarning[] = [];
 
   validateRequiredFields(transactions, errors);
+  validateDataTypes(transactions, errors);
   validateBalanceReconciliation(transactions, warnings);
   validateDateOrdering(transactions, warnings);
   detectDuplicates(transactions, warnings);
@@ -39,6 +41,63 @@ function validateRequiredFields(
         line: i,
         field: 'amount',
         issue: 'Neither debit nor credit amount found',
+        severity: 'error',
+      });
+    }
+  });
+}
+
+function validateDataTypes(
+  transactions: NormalizedTransaction[],
+  errors: ValidationWarning[]
+): void {
+  const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  transactions.forEach((t, i) => {
+    if (t.date && !ISO_DATE_RE.test(t.date)) {
+      errors.push({
+        line: i,
+        field: 'date',
+        issue: `Date is not in ISO format (YYYY-MM-DD): "${t.date}"`,
+        severity: 'error',
+      });
+    }
+
+    if (t.date && ISO_DATE_RE.test(t.date)) {
+      const parsed = new Date(t.date);
+      if (isNaN(parsed.getTime())) {
+        errors.push({
+          line: i,
+          field: 'date',
+          issue: `Date is not a valid calendar date: "${t.date}"`,
+          severity: 'error',
+        });
+      }
+    }
+
+    if (t.debit != null && (typeof t.debit !== 'number' || isNaN(t.debit) || t.debit < 0)) {
+      errors.push({
+        line: i,
+        field: 'debit',
+        issue: `Debit must be a non-negative number, got: ${t.debit}`,
+        severity: 'error',
+      });
+    }
+
+    if (t.credit != null && (typeof t.credit !== 'number' || isNaN(t.credit) || t.credit < 0)) {
+      errors.push({
+        line: i,
+        field: 'credit',
+        issue: `Credit must be a non-negative number, got: ${t.credit}`,
+        severity: 'error',
+      });
+    }
+
+    if (t.description && t.description.length > 500) {
+      errors.push({
+        line: i,
+        field: 'description',
+        issue: `Description exceeds 500 characters (${t.description.length})`,
         severity: 'error',
       });
     }
@@ -110,7 +169,7 @@ function detectDuplicates(
         warnings.push({
           line: j,
           field: 'transaction',
-          issue: 'Possible duplicate transaction',
+          issue: `Possible duplicate of row ${i} (same date, description, and amount)`,
           severity: 'warning',
         });
       }

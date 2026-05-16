@@ -53,7 +53,7 @@ export class HDFCParser implements IBankParser {
         summary.accountNumber = accMatch[1]!.replace(/\s/g, '');
       }
 
-      // Account holder name (typically after "Mr./Mrs./Ms." or before account line)
+      // Account holder name
       const nameMatch = line.match(/(?:mr\.?|mrs\.?|ms\.?|m\/s)\s+(.+)/i);
       if (nameMatch && !summary.accountHolderName) {
         summary.accountHolderName = nameMatch[1]!.trim();
@@ -70,7 +70,6 @@ export class HDFCParser implements IBankParser {
         };
       }
 
-      // Account type
       if (/savings/i.test(line)) summary.accountType = 'Savings';
       else if (/current/i.test(line) && !summary.accountType) summary.accountType = 'Current';
     }
@@ -81,23 +80,17 @@ export class HDFCParser implements IBankParser {
   private extractTransactions(lines: string[]): RawTransaction[] {
     const transactions: RawTransaction[] = [];
 
-    // HDFC has varied formats. Match lines starting with a date.
-    // Typical: DD/MM/YYYY <description> <debit> <credit> <balance>
-    // or columns separated by whitespace with amounts at the end.
-
     const dateRegex = /^(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{1,2}[\/-][A-Za-z]{3,9}[\/-]\d{2,4})/;
 
     let pendingDescription = '';
     let lastTransaction: RawTransaction | null = null;
 
     for (const line of lines) {
-      // Skip header rows and known non-transaction lines
       if (/^date\s/i.test(line) || /^particulars/i.test(line) || /---/.test(line)) continue;
       if (/opening\s+balance/i.test(line) && !/\d{1,2}[\/-]/.test(line.slice(0, 12))) continue;
 
       const dateMatch = line.match(dateRegex);
       if (dateMatch) {
-        // Save any pending multi-line description
         if (lastTransaction && pendingDescription) {
           lastTransaction.description = cleanDescription(
             lastTransaction.description + ' ' + pendingDescription
@@ -114,7 +107,6 @@ export class HDFCParser implements IBankParser {
           transactions.push(parsed);
         }
       } else if (lastTransaction) {
-        // Continuation line (multi-line description)
         const hasNumbers = /\d{1,3}(?:,\d{2,3})*\.\d{2}/.test(line);
         if (!hasNumbers && line.length < 100) {
           pendingDescription += ' ' + line;
@@ -122,7 +114,6 @@ export class HDFCParser implements IBankParser {
       }
     }
 
-    // Flush last pending description
     if (lastTransaction && pendingDescription) {
       lastTransaction.description = cleanDescription(
         lastTransaction.description + ' ' + pendingDescription
@@ -133,10 +124,6 @@ export class HDFCParser implements IBankParser {
   }
 
   private parseTransactionLine(rawDate: string, rest: string): RawTransaction | null {
-    // Try to extract amounts from the end of the line.
-    // Look for patterns like: description  10,000.00  40,000.00
-    // Numbers can have commas and are typically at the end.
-
     const amountRegex = /(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)/g;
     const amounts: { value: string; index: number }[] = [];
     let match: RegExpExecArray | null;
@@ -153,44 +140,48 @@ export class HDFCParser implements IBankParser {
     let balance: string | null = null;
 
     if (amounts.length >= 3) {
-      // description + debit + credit + balance (or description + amount + balance)
       const firstAmountIdx = amounts[amounts.length - 3]!.index;
       description = rest.slice(0, firstAmountIdx).trim();
       const v1 = amounts[amounts.length - 3]!.value;
       const v2 = amounts[amounts.length - 2]!.value;
       balance = amounts[amounts.length - 1]!.value;
 
-      // Determine which is debit vs credit based on position gap
-      // In HDFC, if one of the middle values is in the "debit" column it's debit
-      debit = v1;
-      credit = v2;
+      const n1 = parseAmount(v1) ?? 0;
+      const n2 = parseAmount(v2) ?? 0;
+
+      // HDFC format: Withdrawal Amt | Deposit Amt | Closing Balance
+      // When only one side has a value, the other is typically "0" or absent.
+      // Use zero-check to determine which column is active.
+      if (n1 > 0 && n2 === 0) {
+        debit = v1;
+        credit = null;
+      } else if (n2 > 0 && n1 === 0) {
+        credit = v2;
+        debit = null;
+      } else {
+        // Both non-zero (unusual) — keep both; inferDebitCredit will resolve
+        debit = v1;
+        credit = v2;
+      }
     } else if (amounts.length === 2) {
       const firstAmountIdx = amounts[0]!.index;
       description = rest.slice(0, firstAmountIdx).trim();
-      // Amount + balance
       debit = amounts[0]!.value;
       balance = amounts[1]!.value;
     } else {
-      // Single amount — treat as balance row or skip
       description = rest.replace(amountRegex, '').trim();
       balance = amounts[0]!.value;
-
-      if (/opening|closing/i.test(description)) {
-        return null;
-      }
+      if (/opening|closing/i.test(description)) return null;
     }
-
-    // Clean up: if debit is "0" or matches balance, it might actually be credit
-    const debitNum = parseAmount(debit);
-    const creditNum = parseAmount(credit);
 
     return {
       date: normalizeDate(rawDate),
       description: cleanDescription(description || 'Transaction'),
-      debit: debitNum === 0 ? null : (debit ?? null),
-      credit: creditNum === 0 ? null : (credit ?? null),
+      debit,
+      credit,
       balance: balance ?? undefined,
       rawText: `${rawDate} ${rest}`,
+      parsingConfidence: 0.85,
     };
   }
 }

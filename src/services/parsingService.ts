@@ -3,9 +3,8 @@ import type {
   StatementSummary,
   ProcessingStatus,
   ValidationResult,
-  UploadSession,
 } from '@/types/statement';
-import { extractTextFromPDF, detectPDFType } from '@/extraction/extractor';
+import { extractWithPositions, detectPDFType } from '@/extraction/extractor';
 import { createParserRegistry } from '@/parsers';
 import { normalize, inferDebitCredit } from '@/normalization/normalizer';
 import { validate } from '@/validation/validator';
@@ -35,7 +34,7 @@ export async function processFile(
 ): Promise<ProcessingResult> {
   onProgress({ status: 'uploaded', message: 'File received', progress: 10 });
 
-  // 1. Detect file type
+  // 1. Detect file type (checks up to 3 pages)
   const pdfType = await detectPDFType(file);
   if (pdfType === 'scanned') {
     throw new Error(
@@ -45,45 +44,52 @@ export async function processFile(
     );
   }
 
-  // 2. Extract text
-  onProgress({ status: 'extracting-text', message: 'Extracting text from PDF...', progress: 25 });
-  const rawText = await extractTextFromPDF(file);
+  // 2. Extract text + word positions for geometric parsing
+  onProgress({ status: 'extracting-text', message: 'Extracting text from PDF…', progress: 25 });
+  const { rawText, wordData } = await extractWithPositions(file);
 
   if (rawText.trim().length < 50) {
     throw new Error(
-      'Very little text was extracted from this PDF. It may be a scanned document or an unsupported format.'
+      'Very little text was extracted from this PDF. ' +
+        'It may be a scanned document or use an unsupported encoding.'
     );
   }
 
   // 3. Detect bank
-  onProgress({ status: 'bank-detecting', message: 'Detecting bank...', progress: 40 });
+  onProgress({ status: 'bank-detecting', message: 'Detecting bank…', progress: 40 });
   const detection = await registry.detectBank(rawText);
 
-  // 4. Parse
+  // 4. Parse — pass word positions so GenericParser can use geometric tiers
   onProgress({
     status: 'parsing',
-    message: `Parsing ${detection.bankName} statement...`,
+    message: detection.bankName === 'Generic'
+      ? 'Parsing statement with generic parser…'
+      : `Parsing ${detection.bankName} statement…`,
     progress: 60,
   });
   const { transactions: rawTxns, summary } = await registry.parse(
     rawText,
-    detection.bankName
+    detection.bankName,
+    { wordPositions: wordData }
   );
 
   if (rawTxns.length === 0) {
     throw new Error(
-      `No transactions found in the ${detection.bankName} statement. ` +
-        'The format may be different from what we expected.'
+      detection.bankName === 'Generic'
+        ? 'Could not extract any transactions. The PDF format may not be supported, ' +
+            'or the statement may be scanned. Try a digitally-generated bank statement.'
+        : `No transactions found in the ${detection.bankName} statement. ` +
+            'The statement layout may differ from what was expected.'
     );
   }
 
   // 5. Normalize
   let normalized = normalize(rawTxns, detection.bankName);
 
-  // 6. Smart debit/credit inference
+  // 6. Smart debit/credit inference using balance deltas
   normalized = inferDebitCredit(normalized);
 
-  // 7. Fill in summary totals
+  // 7. Fill summary totals
   if (normalized.length > 0) {
     summary.totalTransactions = normalized.length;
     if (summary.openingBalance == null) {
@@ -95,7 +101,7 @@ export async function processFile(
   }
 
   // 8. Validate
-  onProgress({ status: 'validating', message: 'Validating transactions...', progress: 85 });
+  onProgress({ status: 'validating', message: 'Validating transactions…', progress: 85 });
   const validation = validate(normalized);
 
   onProgress({ status: 'ready-for-export', message: 'Ready!', progress: 100 });

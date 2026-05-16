@@ -1,6 +1,11 @@
-/** Parse a numeric string like "1,00,000.50" or "10,000.00" into a number. */
-export function parseAmount(raw: string | undefined | null): number | null {
+/**
+ * Parse a numeric string like "1,00,000.50", "-$10,000.00", or "10,000.00 Dr" into a number.
+ * Returns null for empty / unparseable values.
+ * The returned number preserves sign — callers decide whether it maps to debit or credit.
+ */
+export function parseAmount(raw: string | number | undefined | null): number | null {
   if (raw == null) return null;
+  // Strip currency symbols and thousands separators; keep digits, decimal point, and sign
   const cleaned = raw.toString().replace(/[₹$€£,\s]/g, '').trim();
   if (cleaned === '' || cleaned === '-') return null;
   const num = parseFloat(cleaned);
@@ -25,6 +30,7 @@ const MONTH_MAP: Record<string, string> = {
 /**
  * Normalize various date formats to ISO "YYYY-MM-DD".
  * Handles: DD/MM/YYYY, DD-MM-YYYY, DD-MMM-YYYY, DD/MM/YY, MM/DD/YYYY (US).
+ * 2-digit years are assumed to be 2000s (i.e. "26" → "2026").
  */
 export function normalizeDate(raw: string, usFormat = false): string {
   const trimmed = raw.trim();
@@ -51,7 +57,7 @@ export function normalizeDate(raw: string, usFormat = false): string {
     let p2 = numMatch[2]!;
     let p3 = numMatch[3]!;
 
-    // YYYY-MM-DD already ISO
+    // YYYY-MM-DD is already ISO
     if (p1.length === 4) {
       return `${p1}-${p2.padStart(2, '0')}-${p3.padStart(2, '0')}`;
     }
@@ -78,4 +84,21 @@ export function cleanDescription(raw: string): string {
 export function countKeywords(text: string, keywords: string[]): number {
   const lower = text.toLowerCase();
   return keywords.filter((kw) => lower.includes(kw.toLowerCase())).length;
+}
+
+/**
+ * Given a raw amount string, extract sign from Dr/Cr suffix and strip it.
+ * Returns { amount: string, isDebit: boolean | null }
+ * where null means "unknown direction" (caller uses column position to decide).
+ */
+export function parseAmountWithSuffix(raw: string): {
+  amount: string;
+  isDebit: boolean | null;
+} {
+  const trimmed = raw.trim();
+  const drMatch = trimmed.match(/^(.+?)\s*(Dr\.?|DR)$/i);
+  if (drMatch) return { amount: drMatch[1]!, isDebit: true };
+  const crMatch = trimmed.match(/^(.+?)\s*(Cr\.?|CR)$/i);
+  if (crMatch) return { amount: crMatch[1]!, isDebit: false };
+  return { amount: trimmed, isDebit: null };
 }
