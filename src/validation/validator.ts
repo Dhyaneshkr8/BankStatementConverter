@@ -1,14 +1,14 @@
 import type { NormalizedTransaction, ValidationResult, ValidationWarning } from '@/types/statement';
 
-// Matches TECHNICAL_SPEC.md: ±0.01 tolerance on balance reconciliation
-const BALANCE_TOLERANCE = 0.01;
+/** Shared tolerance for balance reconciliation checks. Matches TECHNICAL_SPEC.md: ±0.01. */
+export const BALANCE_TOLERANCE = 0.01;
 
 export function validate(transactions: NormalizedTransaction[]): ValidationResult {
   const errors: ValidationWarning[] = [];
   const warnings: ValidationWarning[] = [];
 
-  validateRequiredFields(transactions, errors);
-  validateDataTypes(transactions, errors);
+  const missingFields = validateRequiredFields(transactions, errors);
+  validateDataTypes(transactions, errors, missingFields);
   validateBalanceReconciliation(transactions, warnings);
   validateDateOrdering(transactions, warnings);
   detectDuplicates(transactions, warnings);
@@ -25,16 +25,21 @@ export function validate(transactions: NormalizedTransaction[]): ValidationResul
   };
 }
 
+/** Returns a Set of "rowIndex:field" strings for fields already flagged as missing. */
 function validateRequiredFields(
   transactions: NormalizedTransaction[],
   errors: ValidationWarning[]
-): void {
+): Set<string> {
+  const missing = new Set<string>();
+
   transactions.forEach((t, i) => {
     if (!t.date) {
       errors.push({ line: i, field: 'date', issue: 'Missing date', severity: 'error' });
+      missing.add(`${i}:date`);
     }
     if (!t.description) {
       errors.push({ line: i, field: 'description', issue: 'Missing description', severity: 'error' });
+      missing.add(`${i}:description`);
     }
     if (t.debit == null && t.credit == null) {
       errors.push({
@@ -43,17 +48,24 @@ function validateRequiredFields(
         issue: 'Neither debit nor credit amount found',
         severity: 'error',
       });
+      missing.add(`${i}:debit`);
+      missing.add(`${i}:credit`);
     }
   });
+
+  return missing;
 }
 
 function validateDataTypes(
   transactions: NormalizedTransaction[],
-  errors: ValidationWarning[]
+  errors: ValidationWarning[],
+  missingFields: Set<string>
 ): void {
   const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
   transactions.forEach((t, i) => {
+    if (missingFields.has(`${i}:date`)) return; // already reported as missing
+
     if (t.date && !ISO_DATE_RE.test(t.date)) {
       errors.push({
         line: i,

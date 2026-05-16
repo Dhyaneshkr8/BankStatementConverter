@@ -129,6 +129,8 @@ export interface ParsingOptions {
 /** Base interface all bank parsers must implement. */
 export interface IBankParser {
   bankName: string;
+  /** True for catch-all parsers that should not appear in the supported-banks list. */
+  isFallback?: boolean;
   detectBank(rawText: string): number;
   parse(
     rawText: string,

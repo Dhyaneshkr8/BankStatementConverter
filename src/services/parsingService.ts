@@ -4,7 +4,7 @@ import type {
   ProcessingStatus,
   ValidationResult,
 } from '@/types/statement';
-import { extractWithPositions, detectPDFType } from '@/extraction/extractor';
+import { extractWithPositions } from '@/extraction/extractor';
 import { createParserRegistry } from '@/parsers';
 import { normalize, inferDebitCredit } from '@/normalization/normalizer';
 import { validate } from '@/validation/validator';
@@ -34,19 +34,17 @@ export async function processFile(
 ): Promise<ProcessingResult> {
   onProgress({ status: 'uploaded', message: 'File received', progress: 10 });
 
-  // 1. Detect file type (checks up to 3 pages)
-  const pdfType = await detectPDFType(file);
-  if (pdfType === 'scanned') {
+  // 1. Extract text + word positions; isScanned is detected in the same pass
+  onProgress({ status: 'extracting-text', message: 'Extracting text from PDF…', progress: 25 });
+  const { rawText, wordData, isScanned } = await extractWithPositions(file);
+
+  if (isScanned) {
     throw new Error(
       'This appears to be a scanned/image-based PDF. ' +
         'Currently only text-based PDFs are supported. ' +
         'OCR support is coming in a future version.'
     );
   }
-
-  // 2. Extract text + word positions for geometric parsing
-  onProgress({ status: 'extracting-text', message: 'Extracting text from PDF…', progress: 25 });
-  const { rawText, wordData } = await extractWithPositions(file);
 
   if (rawText.trim().length < 50) {
     throw new Error(

@@ -32,36 +32,21 @@ function extractPageLines(items: Array<{ str: string; transform: number[] }>): s
   return lines.join('\n');
 }
 
-/** Extract all text content from a PDF file (client-side, text-based PDFs). */
-export async function extractTextFromPDF(file: File): Promise<string> {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  const pages: string[] = [];
-
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    const items = content.items as Array<{ str: string; transform: number[] }>;
-    const pageText = extractPageLines(items);
-    if (pageText) pages.push(pageText);
-  }
-
-  return pages.join('\n\n--- PAGE BREAK ---\n\n');
-}
-
 /**
  * Extract text AND word-level position data from a PDF.
- * Returns both the full text string and structured word positions
- * suitable for geometric parsing (rectangle-tier and position-tier).
+ * Also detects whether the PDF is scanned (image-based) by counting text characters
+ * across the first 3 pages — avoids parsing the file twice.
  */
 export async function extractWithPositions(file: File): Promise<{
   rawText: string;
   wordData: PDFWordData;
+  isScanned: boolean;
 }> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   const pages: string[] = [];
   const words: WordPosition[] = [];
+  let scannedCheck = '';
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
@@ -73,6 +58,11 @@ export async function extractWithPositions(file: File): Promise<{
       width: number;
       height: number;
     }>;
+
+    // Accumulate text from first 3 pages for scanned detection
+    if (pageNum <= 3) {
+      scannedCheck += items.map((item) => item.str).join('');
+    }
 
     // Collect word positions (PDF Y is bottom-up; convert to top-down)
     for (const item of items) {
@@ -93,27 +83,6 @@ export async function extractWithPositions(file: File): Promise<{
   return {
     rawText: pages.join('\n\n--- PAGE BREAK ---\n\n'),
     wordData: { words, rectangles: [] }, // rectangles need Pyodide/pdfminer to extract
+    isScanned: scannedCheck.trim().length <= 100,
   };
-}
-
-/**
- * Detect whether a PDF is text-based or image-based (scanned).
- * Checks up to the first 3 pages so multi-page PDFs with sparse first pages
- * are not incorrectly classified as scanned.
- */
-export async function detectPDFType(file: File): Promise<'text' | 'scanned'> {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-  const pagesToCheck = Math.min(pdf.numPages, 3);
-  let totalText = '';
-
-  for (let i = 1; i <= pagesToCheck; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    totalText += content.items.map((item: any) => item.str).join('');
-    if (totalText.trim().length > 100) return 'text'; // short-circuit early
-  }
-
-  return totalText.trim().length > 100 ? 'text' : 'scanned';
 }

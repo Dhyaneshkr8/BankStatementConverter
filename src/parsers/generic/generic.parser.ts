@@ -7,6 +7,15 @@ import type {
 } from '@/types/statement';
 import { parseAmount, normalizeDate, cleanDescription } from '../utils';
 
+interface ColumnRange { minX: number; maxX: number; }
+interface ColumnMap {
+  date?: ColumnRange;
+  description?: ColumnRange;
+  debit?: ColumnRange;
+  credit?: ColumnRange;
+  balance?: ColumnRange;
+}
+
 /**
  * GenericParser — three-tier fallback for unrecognised bank statements.
  *
@@ -22,6 +31,7 @@ import { parseAmount, normalizeDate, cleanDescription } from '../utils';
  */
 export class GenericParser implements IBankParser {
   bankName = 'Generic';
+  isFallback = true;
 
   detectBank(_rawText: string): number {
     return 0.10; // Always eligible but always yields to specific parsers
@@ -109,14 +119,8 @@ export class GenericParser implements IBankParser {
     );
   }
 
-  private buildColumnMap(headerRow: WordPosition[]): {
-    date?: { minX: number; maxX: number };
-    description?: { minX: number; maxX: number };
-    debit?: { minX: number; maxX: number };
-    credit?: { minX: number; maxX: number };
-    balance?: { minX: number; maxX: number };
-  } {
-    const map: ReturnType<typeof this.buildColumnMap> = {};
+  private buildColumnMap(headerRow: WordPosition[]): ColumnMap {
+    const map: ColumnMap = {};
 
     for (const word of headerRow) {
       const t = word.text.toLowerCase();
@@ -134,7 +138,7 @@ export class GenericParser implements IBankParser {
 
   private rowToTransaction(
     row: WordPosition[],
-    colMap: ReturnType<typeof this.buildColumnMap>
+    colMap: ColumnMap
   ): RawTransaction | null {
     const getCell = (range?: { minX: number; maxX: number }) => {
       if (!range) return '';
@@ -241,9 +245,8 @@ export class GenericParser implements IBankParser {
 
       const prevBalance = parseAmount(prev.balance as string);
       const currBalance = parseAmount(curr.balance as string);
-      const amount = parseAmount(curr.debit as string);
 
-      if (prevBalance != null && currBalance != null && amount != null) {
+      if (prevBalance != null && currBalance != null) {
         const diff = currBalance - prevBalance;
         if (diff < 0) {
           curr.debit = Math.abs(diff).toString();
